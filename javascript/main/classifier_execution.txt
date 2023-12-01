@@ -1,0 +1,548 @@
+/*
+***************************************************************************
+  IMPORTS
+***************************************************************************
+*/
+
+
+var CASE_STUDIES = require("users/stamlazaros/hua:t-h-e-s-i-s/configurations/case_studies");
+var S1_UTILITIES = require("users/stamlazaros/hua:t-h-e-s-i-s/utilities/s1");
+var S2_UTILITIES = require("users/stamlazaros/hua:t-h-e-s-i-s/utilities/s2");
+
+
+/*
+*********************************************************************
+  FUNCTIONS
+*********************************************************************
+*/
+
+
+//-----------------------Data Displaying Functions-----------------------
+
+
+function create_legend_row(color, name) {
+  /*
+  Description:
+    Creates and formats a single legend row. The row consists of
+    two ui.Label objects, a color box and a description label.
+
+  Parameters:
+    color (string): A hex color code representing the color of the legend box.
+    name  (string): A description for the legend entry.
+
+  Returns:
+    A ui.Panel object representing the legend row.
+  */
+
+  // Create the color box label.
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: "10px",
+      margin: "4px"
+    }
+  });
+ 
+  // Create the description label.
+  var description = ui.Label({
+    value: name,
+    style: {
+      margin: "5px",
+    }
+  });
+ 
+  // Return the legend row panel.
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow("horizontal")
+  });
+}
+
+
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2StartDate = "2019-12-01";
+var s2EndDate = "2020-03-01";
+
+var cloudProbability = 65;
+
+// `Dynamic World Land Cover`
+var dwStartDate = "2014-12-01";
+var dwEndDate = "2015-03-01";
+
+// `Sentinel-1 GRD`
+var b1 = "VV";
+var b2 = "VH";
+
+// `Digital Elevation`
+var demProvider = "USGS";
+
+// Projection of interest.
+var projectionCRS = "EPSG:4326";
+var projectionScale = 10;
+
+// EMS case of interest.
+var caseCode = "emsr692";
+var caseArea = "magnesia";
+
+var rasterIdentifier = "041299_04E8BD_E9C5_050224_060B99_D80F";
+var preEventRasterIdentifier = "S1A_IW_GRDH_1SDV_20220103T162359_20220103T162424_041299_04E8BD_E9C5";
+var postEventRasterIdentifier = "S1A_IW_GRDH_1SDV_20230907T162412_20230907T162437_050224_060B99_D80F";
+
+var classifierIdentifier = "users/stamlazaros/hua/t-h-e-s-i-s/assets/classifiers/base";
+var classifierProperties = [
+  "VHVHD", "VHVHQ", "VVVHD", "VVVHQ", "VVVVD", "VVVVQ", "NDPID",
+  "PRE_VV", "PRE_VH", "PRE_NDPI", "POST_VV", "POST_VH", "POST_NDPI"
+];
+
+var destinationFolder = "users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/rasters/classified/2023_09_07";
+
+
+/*
+********************************************************************
+  CONFIGURATION
+********************************************************************
+*/
+
+
+// `Digital Elevation Models`
+var demConfigs = {
+  CGIAR: {    // `SRTM Digital Elevation Data Version 4`
+    name: "CGIAR/SRTM90_V4"
+  },
+  USGS: {     // `NASA SRTM Digital Elevation`
+    name: "USGS/SRTMGL1_003"
+  },
+  NASA: {     // `NASA NASADEM Digital Elevation`
+    name: "NASA/NASADEM_HGT/001"
+  },
+  ASTER: {    // `AG100: ASTER Global Emissivity Dataset 100-meter V003`
+    name: "NASA/ASTER_GED/AG100_003"
+  }
+};
+
+// `Dynamic World LULC v1`
+var dwConfig = {
+  name: "GOOGLE/DYNAMICWORLD/V1"
+};
+
+var dwLabelsPalette = {
+  "water": "419BDF",
+  "trees": "397D49",
+  "grass": "88B053",
+  "flooded vegetation": "7A87C6",
+  "crops": "E49635",
+  "shrub & scrub": "DFC35A",
+  "built": "C4281B",
+  "bare": "A59B8F",
+  "snow & ice": "B39FE1"
+};
+
+var dwPalette = Object.keys(dwLabelsPalette).map(function(key){
+  return dwLabelsPalette[key];
+});
+
+var dwVisualization = {
+  min: 0,
+  max: 8,
+  bands: ["label"],
+  palette: dwPalette
+};
+
+// `Sentinel-1 GRD`
+var s1Config = {
+  name: "COPERNICUS/S1_GRD"
+};
+
+var s1Visualization = {
+  min: [-25, -25, 0],
+  max: [0, 0, 2],
+  bands: ["VV", "VH", "VVVHQ"]
+};
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2Config = {
+  name: "COPERNICUS/S2_SR_HARMONIZED"
+};
+
+var s2CloudsConfig = {
+  name: "COPERNICUS/S2_CLOUD_PROBABILITY"
+};
+
+var rgbVisualization = {
+  min: 0,
+  max: 3000,
+  bands: ["B4", "B3", "B2"]
+};
+
+var mndwiVisualization = {
+  min: -1,
+  max: 0.5,
+  bands: ["MNDWI"],
+  palette: ["red", "yellow", "green", "blue"]
+};
+
+// GEE assets
+var demConfig = demConfigs[demProvider];
+var caseConfig = CASE_STUDIES.cases[caseCode][caseArea];
+
+var areaOfInterest = caseConfig.area_of_interest.geometry();
+var ring = ee.Geometry.LinearRing(areaOfInterest.coordinates().flatten());
+
+// `Classification`
+var classVisualization = {
+  min: 0,
+  max: 2,
+  palette: ["deb887", "C60404", "45b6fe"]
+};
+
+var classificationPalette = {
+  "non water": "deb887",
+  "flood": "C60404",
+  "water": "45b6fe"
+};
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Define the projection of interest.
+
+var projection = ee.Projection(projectionCRS).atScale(projectionScale);
+
+// Load, filter and process the rasters.
+
+// `Digital Elevation`
+var elevation = ee.Image(demConfig.name).unmask();
+var slope = ee.Terrain.slope(elevation);
+
+// `Dynamic World Land Cover`
+var dwMosaic = ee.ImageCollection(dwConfig.name)
+  .filterDate(dwStartDate, dwEndDate)
+  .filterBounds(caseConfig.area_of_interest)
+  .select(["label"])
+  .mode()
+  .clipToCollection(caseConfig.area_of_interest)
+  .reproject(projection);
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2Collection = ee.ImageCollection(s2Config.name)
+  .filterDate(s2StartDate, s2EndDate)
+  .filterBounds(caseConfig.area_of_interest);
+
+// Aggregate the system index values.
+var s2Indexes = s2Collection.aggregate_array("system:index");
+
+// `Sentinel-2: Cloud Probability`
+var s2Clouds = ee.ImageCollection(s2CloudsConfig.name)
+  .filter(ee.Filter.inList("system:index", s2Indexes));
+
+// Join the two collecctions based on the system index values.
+var joinedS2Collection = ee.Join.saveFirst("cloud_mask").apply({
+  primary: s2Collection,
+  secondary: s2Clouds,
+  condition:
+    ee.Filter.equals({leftField: "system:index", rightField: "system:index"})
+});
+
+// Perform cloud masking.
+var s2Mosaic = ee.ImageCollection(joinedS2Collection)
+  .map(S2_UTILITIES.mask_edges)
+  .map(function(raster){
+    return S2_UTILITIES.mask_clouds(raster, cloudProbability);
+  })
+  .mean()
+  .select(["B11", "B4", "B3", "B2"])
+  .clipToCollection(caseConfig.area_of_interest);
+
+// Engineer new bands
+
+// `MNDWI`
+var mndwi = s2Mosaic
+  .expression(S2_UTILITIES.bandCombinations.mndwi.expression)
+  .rename(S2_UTILITIES.bandCombinations.mndwi.name);
+
+// `Sentinel-1 GRD`
+var preEventRaster = ee.Image([s1Config.name, preEventRasterIdentifier].join("/"));
+var postEventRaster = ee.Image([s1Config.name, postEventRasterIdentifier].join("/"));
+
+preEventRaster = preEventRaster.addBands({
+  srcImg: preEventRaster.select("angle").updateMask(preEventRaster.select("angle").mask().gt(0)),
+  overwrite: true,
+});
+
+postEventRaster = postEventRaster.addBands({
+  srcImg: postEventRaster.select("angle").updateMask(postEventRaster.select("angle").mask().gt(0)),
+  overwrite: true,
+});
+
+var acquisition = postEventRaster.date();
+
+// Apply angular-based radiometric slope correction.
+preEventRaster = S1_UTILITIES.slope_correction(preEventRaster, elevation);
+postEventRaster = S1_UTILITIES.slope_correction(postEventRaster, elevation);
+
+// Apply a Refined-Lee speckle filter to reduce noise.
+preEventRaster = ee.Image(S1_UTILITIES.refined_lee(preEventRaster))
+  .select(["VV", "VH"])
+  .clipToCollection(caseConfig.area_of_interest)
+  .reproject(projection);
+
+postEventRaster = ee.Image(S1_UTILITIES.refined_lee(postEventRaster))
+  .select(["VV", "VH"])
+  .clipToCollection(caseConfig.area_of_interest)
+  .reproject(projection);
+
+// Engineer new bands.
+
+var differenceExpression = S1_UTILITIES.bandCombinations.difference.expression;
+var quotientExpression = S1_UTILITIES.bandCombinations.quotient.expression;
+var ndpiExpression = S1_UTILITIES.bandCombinations.ndpi.expression;
+
+var differenceName = S1_UTILITIES.bandCombinations.difference.name;
+var quotientName = S1_UTILITIES.bandCombinations.quotient.name;
+var ndpiName = S1_UTILITIES.bandCombinations.ndpi.name;
+
+// `PRE_VVVHD`
+var prevvprevhDifference = ee.Image().expression({
+    expression: differenceExpression,
+    map: {
+      b1: preEventRaster.select(b1),
+      b2: preEventRaster.select(b2)
+    }
+  }).rename(differenceName.replace("b1", b1).replace("b2", b2));
+
+// `POST_VVVHD`
+var postvvpostvhDifference = ee.Image().expression({
+    expression: differenceExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: postEventRaster.select(b2)
+    }
+  }).rename(differenceName.replace("b1", b1).replace("b2", b2));
+
+// `VVVVD`
+var postvvprevvDifference = ee.Image().expression({
+    expression: differenceExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: preEventRaster.select(b1)
+    }
+  })
+  .rename(differenceName.replace("b1", b1).replace("b2", b1));
+
+// `VHVHD`
+var postvhprevhDifference = ee.Image().expression({
+    expression: differenceExpression,
+    map: {
+      b1: postEventRaster.select(b2),
+      b2: preEventRaster.select(b2)
+    }
+  })
+  .rename(differenceName.replace("b1", b2).replace("b2", b2));
+
+// `VVVHD`
+var postvvprevhDifference = ee.Image().expression({
+    expression: differenceExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: preEventRaster.select(b2)
+    }
+  })
+  .rename(differenceName.replace("b1", b1).replace("b2", b2));
+
+// `PRE_VVVHQ`
+var prevvprevhQuotient = ee.Image().expression({
+    expression: quotientExpression,
+    map: {
+      b1: preEventRaster.select(b1),
+      b2: preEventRaster.select(b2)
+    }
+  }).rename(quotientName.replace("b1", b1).replace("b2", b2));
+
+// `POST_VVVHQ`
+var postvvpostvhQuotient = ee.Image().expression({
+    expression: quotientExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: postEventRaster.select(b2)
+    }
+  }).rename(quotientName.replace("b1", b1).replace("b2", b2));
+
+// `VVVVQ`
+var postvvprevvQuotient = ee.Image().expression({
+    expression: quotientExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: preEventRaster.select(b1)
+    }
+  })
+  .rename(quotientName.replace("b1", b1).replace("b2", b1));
+
+// `VHVHQ`
+var postvhprevhQuotient = ee.Image().expression({
+    expression: quotientExpression,
+    map: {
+      b1: postEventRaster.select(b2),
+      b2: preEventRaster.select(b2)
+    }
+  })
+  .rename(quotientName.replace("b1", b2).replace("b2", b2));
+
+// `VVVHQ`
+var postvvprevhQuotient = ee.Image().expression({
+    expression: quotientExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: preEventRaster.select(b2)
+    }
+  })
+  .rename(quotientName.replace("b1", b1).replace("b2", b2));
+
+// `PRE_NDPI`
+var preNDPI = ee.Image().expression({
+    expression: ndpiExpression,
+    map: {
+      b1: preEventRaster.select(b1),
+      b2: preEventRaster.select(b2)
+    }
+  }).rename("PRE_NDPI");
+
+// `POST_NDPI`
+var postNDPI = ee.Image().expression({
+    expression: ndpiExpression,
+    map: {
+      b1: postEventRaster.select(b1),
+      b2: postEventRaster.select(b2)
+    }
+  }).rename("POST_NDPI");
+
+// `NDPID`
+var NDPIDifference = postNDPI.subtract(preNDPI).rename("NDPID");
+
+// Rename S1-GRD raster bands using a regular expression.
+var preEventSamplesSource = preEventRaster.regexpRename("V", "PRE_V", false);
+var postEventSamplesSource = postEventRaster.regexpRename("V", "POST_V", false);
+
+// Add bands to both pre- & post- event rasters.
+preEventRaster = preEventRaster.addBands([prevvprevhQuotient]);
+postEventRaster = postEventRaster.addBands([postvvpostvhQuotient]);
+
+// Generate a composite with the essential bands for classification.
+var raster = preEventSamplesSource.addBands([
+  postEventSamplesSource, postvvprevvDifference, postvhprevhDifference, 
+  postvvprevhDifference, postvvprevvQuotient, postvhprevhQuotient,
+  postvvprevhQuotient, preNDPI, postNDPI, NDPIDifference,
+]);
+
+// Raster classification.
+
+// Construct a RF classifier from the decision tree feature collection.
+var trees = ee.FeatureCollection(classifierIdentifier).aggregate_array("tree");
+var classifier = ee.Classifier.decisionTreeEnsemble(trees);
+
+// Perform classification.
+var classified = raster.select(classifierProperties).classify(classifier);
+
+
+/*
+***************************************************************
+  CONSOLE
+***************************************************************
+*/
+
+
+print("raster:", raster);
+
+print("*classifier*");
+print("trees:", trees);
+
+print("*dates*");
+print("acquisition date:", acquisition);
+print("event date:", caseConfig.event_date);
+print("difference (in days):", acquisition.difference(caseConfig.event_date, "days"));
+
+
+/*
+**************************************************************
+  VISUALIZATION
+**************************************************************
+*/
+
+
+// Generate categorical legends.
+
+// `Dynamic-World`
+var dwLegend = ui.Panel({
+  style: {position: "bottom-left", padding: "5px"}
+});
+
+var dwLegendTitle = ui.Label({
+  value: "DW",
+  style: {margin: "0px", fontSize: "14px", fontWeight: "bold"}
+});
+
+dwLegend.add(dwLegendTitle);
+
+for (var key in dwLabelsPalette) {
+  dwLegend.add(create_legend_row(dwLabelsPalette[key], key));
+}
+
+// `Class-Labels`
+var legend = ui.Panel({
+  style: {position: "bottom-right", padding: "5px"}
+});
+
+var legendTitle = ui.Label({
+  value: "RF",
+  style: {margin: "0px", fontSize: "14px", fontWeight: "bold"}
+});
+
+legend.add(legendTitle);
+
+for (var key in classificationPalette) {
+  legend.add(create_legend_row(classificationPalette[key], key));
+}
+
+Map.add(legend);
+Map.add(dwLegend);
+Map.centerObject(ring);
+
+Map.addLayer(preEventRaster, s1Visualization, "rasters: S1-GRD (pre)");
+Map.addLayer(postEventRaster, s1Visualization, "rasters: S1-GRD (post)");
+
+Map.addLayer(s2Mosaic, rgbVisualization, "rasters: S2-L2A (RGB)");
+Map.addLayer(mndwi, mndwiVisualization, "rasters: S2-L2A (MNDWI)");
+Map.addLayer(dwMosaic, dwVisualization, "rasters: DW");
+
+Map.addLayer(classified, classVisualization, "rasters: classified");
+
+Map.addLayer(ring, {color: "white"}, "vectors: region");
+
+
+/*
+**************************************************************
+  EXPORT
+**************************************************************
+*/
+
+
+Export.image.toAsset({
+  image: classified,
+  assetId: [destinationFolder, rasterIdentifier].join("/"),
+  description: rasterIdentifier,
+  maxPixels: 1e13,
+  crs: projectionCRS,
+  scale: projectionScale,
+  region: areaOfInterest
+});

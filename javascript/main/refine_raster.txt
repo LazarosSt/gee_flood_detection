@@ -1,0 +1,205 @@
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// Projection of interest.
+var projectionCRS = "EPSG:4326";
+var projectionScale = 10;
+
+// `Digital Elevation`
+var demProvider = "USGS";
+var steepnessThreshold = 8;
+
+// `Dynamic World Land Cover`
+var dwStartDate = "2023-01-01";
+var dwEndDate = "2023-09-01";
+
+// `Classification`
+var identifier = "041299_04E8BD_E9C5_050224_060B99_D80F";
+var classification = ee.Image("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/rasters/classified/2023_09_07/041299_04E8BD_E9C5_050224_060B99_D80F");
+
+// GEE assets.
+var areaOfInterest = ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/magnesia/area_of_interest");
+
+var emsrWaterSurfaces = [
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karditsa/2023_09_07/water_surfaces"),
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karla/2023_09_07/water_surfaces"),
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/magnesia/water_surfaces")
+];
+
+var destinationFolder = "users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/rasters/classified/2023_09_07";
+
+
+/*
+********************************************************************
+  CONFIGURATION
+********************************************************************
+*/
+
+
+// `Digital Elevation Models`
+var demConfigs = {
+  CGIAR: {    // `SRTM Digital Elevation Data Version 4`
+    name: "CGIAR/SRTM90_V4"
+  },
+  USGS: {     // `NASA SRTM Digital Elevation`
+    name: "USGS/SRTMGL1_003"
+  },
+  NASA: {     // `NASA NASADEM Digital Elevation`
+    name: "NASA/NASADEM_HGT/001"
+  },
+  ASTER: {    // `AG100: ASTER Global Emissivity Dataset 100-meter V003`
+    name: "NASA/ASTER_GED/AG100_003"
+  }
+};
+
+var demVisualization = {
+  min: 0,
+  max: 1500,
+  palette: ["black", "white"]
+};
+
+// `Dynamic World LULC v1`
+var dwConfig = {
+  name: "GOOGLE/DYNAMICWORLD/V1"
+};
+
+var dwVisualization = {
+  min: 0,
+  max: 8,
+  bands: ["label"],
+  palette: [
+    "419BDF", "397D49", "88B053",
+    "7A87C6", "E49635", "DFC35A",
+    "C4281B", "A59B8F", "B39FE1"
+  ]
+};
+
+// `Classification`
+var classVisualization = {
+  min: 0,
+  max: 2,
+  palette: ["deb887", "C60404", "45b6fe"]
+};
+
+// GEE assets
+var demConfig = demConfigs[demProvider];
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Define the projection of interest.
+
+var projection = ee.Projection("EPSG:4326").atScale(10);
+
+// Load, filter and process the rasters.
+
+// `Digital Elevation`
+var elevation = ee.Image(demConfig.name).clipToCollection(areaOfInterest);
+var steepAreas = ee.Terrain.slope(elevation).gte(steepnessThreshold);
+
+// `Dynamic World Land Cover`
+var dwMosaic = ee.ImageCollection(dwConfig.name)
+  .filterDate(dwStartDate, dwEndDate)
+  .filterBounds(areaOfInterest)
+  .select(["label"])
+  .mode()
+  .clipToCollection(areaOfInterest)
+  .reproject(projection);
+
+// Create water mask.
+var dwWaterMask = dwMosaic.eq(0);
+
+// Process surfaces catalog.
+
+// Flatten water surfaces.
+emsrWaterSurfaces = ee.FeatureCollection(emsrWaterSurfaces).flatten()
+  .map(function(vector){
+    return vector.set("label", 1);
+  });
+
+// Create water mask.
+var emsrWaterMask = emsrWaterSurfaces.reduceToImage({
+    properties: ["label"],
+    reducer: ee.Reducer.first()
+})
+.rename("label")
+.reproject(projection);
+
+// Combine water masks to distinguish water & non-water surfaces.
+
+var waterSurfacesMask = ee.ImageCollection([dwWaterMask, emsrWaterMask])
+  .map(function(raster){return raster.int()})
+  .reduce(ee.Reducer.lastNonNull())
+  .rename("label");
+
+var nonWaterSurfacesMask = waterSurfacesMask.not();
+
+// Identify misclassifed surfaces.
+var misclassifiedFloodSurfaces = classification.eq(1).bitwiseAnd(waterSurfacesMask);
+var misclassifiedWaterSurfaces = classification.eq(2).bitwiseAnd(nonWaterSurfacesMask);
+
+// Refine the classification by correcting misclassified areas.
+var refined = classification
+  .where(steepAreas, 0)
+  .where(misclassifiedWaterSurfaces, 0)
+  // .where(misclassifiedFloodSurfaces, 2);
+  .where(emsrWaterMask, 2);
+
+// Refine classification with a Majority filter.
+
+// Count patch sizes.
+var patchSize = refined.connectedPixelCount(50, false);
+
+// Construct the filter.
+var filtered = refined.focal_mode({
+  radius: 30,
+  kernelType: "square",
+  units: "meters",
+}); 
+  
+// Replace small patches with filtered values.
+refined = refined.where(patchSize.lt(25), filtered);
+
+
+/*
+**************************************************************
+  VISUALIZATION
+**************************************************************
+*/
+
+
+Map.centerObject(areaOfInterest);
+
+Map.addLayer(dwMosaic, dwVisualization, "rasters: DW LULC");
+
+Map.addLayer(elevation, demVisualization, "rasters: elevation");
+Map.addLayer(steepAreas, {min:0, max:1}, "rasters: steep areas");
+
+Map.addLayer(classification, classVisualization, "rasters: classification");
+Map.addLayer(refined, classVisualization, "rasters: classification (refined)");
+
+
+/*
+**************************************************************
+  EXPORT
+**************************************************************
+*/
+
+Export.image.toAsset({
+  image: refined,
+  assetId: [destinationFolder, identifier].join("/"),
+  description: identifier,
+  maxPixels: 1e13,
+  crs: projectionCRS,
+  scale: projectionScale,
+  region: areaOfInterest
+});

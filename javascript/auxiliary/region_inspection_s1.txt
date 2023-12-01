@@ -1,0 +1,299 @@
+/*
+***************************************************************************
+  IMPORTS
+***************************************************************************
+*/
+
+
+var TXT_PACKAGE = require("users/gena/packages:text");
+var CASE_STUDIES = require("users/stamlazaros/hua:t-h-e-s-i-s/configurations/case_studies");
+
+
+/*
+*********************************************************************
+  FUNCTIONS
+*********************************************************************
+*/
+
+
+function translate(pt, dx, dy) {
+  /*
+  Description:
+    Translates a point by the specified displacement along the x and y axes.
+
+  Parameters:
+    pt (ee.List): A list of coordinates representing the original point.
+    dx (float): The displacement along the x axis.
+    dy (float): The displacement along the y axis.
+
+  Returns:
+    An ee.Geometry.Point object representing the translated point.
+  */
+
+  var x1 = ee.Number(pt.get(0)).subtract(dx);
+  var y1 = ee.Number(pt.get(1)).subtract(dy);
+
+  return ee.Geometry.Point(ee.List([x1, y1]));
+}
+
+
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// `Sentinel-1 GRD`
+var startDate = "2023-09-01";
+var endDate = "2023-09-25";
+
+// Runtime stuff.
+var scale = 1000;
+var minObservations = 0;
+var maxObservations = 11;
+
+
+/*
+********************************************************************
+  CONFIGURATION
+********************************************************************
+*/
+
+
+// `Sentinel-1 GRD`
+var config = {
+  name: "COPERNICUS/S1_GRD",
+  mode: "IW",
+  resolution: 10,
+  bands: ["VV", "VH"],
+  ascendingPass: "ASCENDING",
+  descendingPass: "DESCENDING"
+};
+
+var props = {
+  textColor: "000000",
+  outlineColor: "ffffff",
+  outlineWidth: 5,
+  outlineOpacity: 0.4
+};
+
+var coverageVisualization = {
+  min: minObservations,
+  max: maxObservations,
+  palette: [
+    "a50026", "d73027", "f46d43", "fdae61",
+    "fee08b", "ffffbf", "d9ef8b", "a6d96a",
+    "66bd63", "1a9850", "006837"
+  ]
+};
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Load, filter and process the raster collections.
+
+// `Sentinel-1 GRD`
+var collection = ee.ImageCollection(config.name)
+  .filterDate(startDate, endDate)
+  .filterBounds(geometry)
+  .select(config.bands)
+  .filter(ee.Filter.eq("instrumentMode", config.mode))
+  .filter(ee.Filter.eq("resolution_meters", config.resolution))
+  .filter(ee.Filter.eq("transmitterReceiverPolarisation", config.bands))
+  .map(function(raster){
+    var orbitNumber = raster.getNumber("relativeOrbitNumber_start").format("%.0f");
+    var sliceNumber = raster.getNumber("sliceNumber").format("%.0f");
+
+    raster = raster.set("acquisition", raster.date().format("YYYY-MM-dd"));
+    raster = raster.set("tileIdentifier", orbitNumber.cat("_").cat(sliceNumber));
+    return raster;
+  });
+
+// Create a collection of unique acquisition tiles.
+var acquisitionTiles = collection
+  .distinct("tileIdentifier")
+  .map(function(raster){
+    var feature = ee.Feature(raster.geometry());
+    return feature.copyProperties(raster, ["orbitProperties_pass", "tileIdentifier", "acquisition"]);
+  });
+
+// Segment the collection into 'ascending' and 'descending' orbit sub-collections.
+var ascCollection = collection
+  .filter(ee.Filter.eq("orbitProperties_pass", config.ascendingPass));
+
+var descCollection = collection
+  .filter(ee.Filter.eq("orbitProperties_pass", config.descendingPass));
+
+// Calculate coverage for both passes.
+var ascCoverage = ee.FeatureCollection(ascCollection)
+  .reduceToImage(["system:index"], ee.Reducer.count());
+
+var descCoverage = ee.FeatureCollection(descCollection)
+  .reduceToImage(["system:index"], ee.Reducer.count());
+
+// Extract unique tile identifiers for both passes.
+var ascTileIdentifiers = ascCollection.aggregate_array("tileIdentifier").distinct();
+var descTileIdentifiers = descCollection.aggregate_array("tileIdentifier").distinct();
+
+// Filter acquisition tiles for both passes.
+var ascTiles = acquisitionTiles
+  .filter(ee.Filter.eq("orbitProperties_pass", config.ascendingPass));
+
+var descTiles = acquisitionTiles
+  .filter(ee.Filter.eq("orbitProperties_pass", config.descendingPass));
+
+// Filter tile centroids for both passes.
+var ascCentroids = ascTiles
+  .map(function(feature){
+    var centroid = feature.geometry().centroid();
+    return feature.setGeometry(centroid);
+  });
+
+var descCentroids = descTiles
+  .map(function(feature){
+    var centroid = feature.geometry().centroid();
+    return feature.setGeometry(centroid);
+  });
+
+// Extract and organize data based on both asending and descending tile identifiers.
+
+// Raster identifiers.
+var ascRasterIdentifiers = ascTileIdentifiers.map(function(identifier){
+  return collection
+    .filter(ee.Filter.eq("tileIdentifier", identifier))
+    .aggregate_array("system:index");
+});
+
+var descRasterIdentifiers = descTileIdentifiers.map(function(identifier){
+  return collection
+    .filter(ee.Filter.eq("tileIdentifier", identifier))
+    .aggregate_array("system:index");
+});
+
+// Acquisition dates.
+var ascAcquisitions = ascTileIdentifiers.map(function(identifier){
+  return collection
+    .filter(ee.Filter.eq("tileIdentifier", identifier))
+    .aggregate_array("acquisition");
+});
+
+var descAcquisitions = descTileIdentifiers.map(function(identifier){
+  return collection
+    .filter(ee.Filter.eq("tileIdentifier", identifier))
+    .aggregate_array("acquisition");
+});
+
+
+/*
+***************************************************************
+  CONSOLE
+***************************************************************
+*/
+
+
+print("**Raster identifiers**");
+print("*grouped*");
+print("ascending:", ee.Dictionary.fromLists(ascTileIdentifiers, ascRasterIdentifiers));
+print("descending:", ee.Dictionary.fromLists(descTileIdentifiers, descRasterIdentifiers));
+
+print("*ungrouped*");
+print("ascending:", ascCollection.aggregate_array("system:index"));
+print("descending:", descCollection.aggregate_array("system:index"));
+
+print("*Raster acquisitions*");
+print("ascending:", ee.Dictionary.fromLists(ascTileIdentifiers, ascAcquisitions));
+print("descending:", ee.Dictionary.fromLists(descTileIdentifiers, descAcquisitions));
+
+print("*Tile centroids*");
+print("ascending:", ascCentroids);
+print("descending:", descCentroids);
+
+
+/*
+**************************************************************
+  VISUALIZATION
+**************************************************************
+*/
+
+
+// Generate a custom data availability legend.
+
+var colorBar = ui.Thumbnail({
+  image: ee.Image.pixelLonLat().select("longitude").int(),
+  style: {stretch: "horizontal", maxHeight: "25px"},
+  params: {
+    bbox: [0, 0, maxObservations, 1],
+    palette: coverageVisualization.palette,
+    dimensions: "100x10",
+    format: "png",
+    min: minObservations,
+    max: maxObservations
+  }
+});
+
+var legendLabels = ui.Panel({
+  widgets: [
+    ui.Label(minObservations, {margin: "4px 8px"}),
+    ui.Label("", {margin: "4px 8px", textAlign: "center", stretch: "horizontal"}),
+    ui.Label(maxObservations, {margin: "4px 8px"})
+  ],
+  layout: ui.Panel.Layout.flow("horizontal")
+});
+
+var legendTitle = ui.Label({
+  value: "Observations:",
+  style: {fontWeight: "bold"}
+});
+
+var legend = ui.Panel([legendTitle, colorBar, legendLabels]);
+
+Map.centerObject(geometry);
+Map.add(legend);
+
+var ascGrid = ascTiles.map(function(tile){
+  // Extract geometries.
+  var geom = tile.geometry();
+  var centroidCoords = geom.centroid().coordinates();
+
+  // Create an edge raster mask.
+  var edge = ee.Image(0).toByte().paint(geom, 1, 2);
+  edge = edge.selfMask().visualize({palette:["black"]});
+
+  // Translate centroid coordinates and add text.
+  var pos = translate(centroidCoords, 0, 0);
+  var orbitDescription = tile.get("tileIdentifier");
+  var textDate = TXT_PACKAGE.draw(orbitDescription, pos, scale, props);
+
+  return ee.ImageCollection([edge, textDate]).mosaic();
+});
+
+Map.addLayer(ascCoverage.updateMask(ascCoverage.gt(0)), coverageVisualization, "rasters: ascending coverage");
+Map.addLayer(ee.ImageCollection(ascGrid), {color:"black"}, "rasters: ascending tiles");
+Map.addLayer(ascCentroids, {color: "black"}, "vectors: asceding centroids");
+
+var descGrid = descTiles.map(function(tile){
+  // Extract geometries.
+  var geom = tile.geometry();
+  var centroidCoords = geom.centroid().coordinates();
+
+  // Create an edge raster mask.
+  var edge = ee.Image(0).toByte().paint(geom, 1, 2);
+  edge = edge.selfMask().visualize({palette:["black"]});
+
+  // Translate centroid coordinates and add text.
+  var pos = translate(centroidCoords, 0, 0);
+  var orbitDescription = tile.get("tileIdentifier");
+  var textDate = TXT_PACKAGE.draw(orbitDescription, pos, scale, props);
+
+  return ee.ImageCollection([edge, textDate]).mosaic();
+});
+
+Map.addLayer(descCoverage.updateMask(descCoverage.gt(0)), coverageVisualization, "rasters: descending coverage");
+Map.addLayer(ee.ImageCollection(descGrid), {color:"black"}, "rasters: descending tiles");
+Map.addLayer(descCentroids, {color: "black"}, "vectors: asceding centroids");

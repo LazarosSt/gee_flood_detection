@@ -1,0 +1,120 @@
+/*
+***************************************************************************
+  IMPORTS
+***************************************************************************
+*/
+
+
+var CASE_STUDIES = require("users/stamlazaros/hua:t-h-e-s-i-s/configurations/case_studies");
+var S2_UTILITIES = require("users/stamlazaros/hua:t-h-e-s-i-s/utilities/s2");
+
+
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// `Sentinel-2 MSI`
+var identifiers = [
+  "S2B_MSIL2A_20180228T092019_N0206_R093_T34SEJ_20180228T144732",
+  "S2B_MSIL2A_20180228T092019_N0206_R093_T34SFJ_20180228T144732",
+  "S2B_MSIL2A_20180228T092019_N0206_R093_T34TEK_20180228T144732",
+  "S2B_MSIL2A_20180228T092019_N0206_R093_T34TFK_20180228T144732",
+  "S2A_MSIL2A_20180329T085551_N0207_R007_T35TMF_20180329T111148",
+  "S2A_MSIL2A_20180329T085551_N0207_R007_T35TMG_20180329T111148"
+];
+
+var cloudProbability = 65;
+
+// EMS case of interest.
+var caseCode = "emsr692";
+var caseArea = "magnesia";
+
+
+/*
+********************************************************************
+  CONFIGURATION
+********************************************************************
+*/
+
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2Config = {
+  name: "COPERNICUS/S2_SR_HARMONIZED"
+};
+
+var rgbVisualization = {
+  min: 0,
+  max: 3000,
+  bands: ["B4", "B3", "B2"]
+};
+
+var ndwiVisualization = {
+  min: -1,
+  max: 0.5,
+  bands: ["NDWI"],
+  palette: ["red", "yellow", "green", "blue"]
+};
+
+// GEE assets.
+var casesConfig = CASE_STUDIES.cases[caseCode];
+var caseConfig = casesConfig[caseArea];
+
+var eventDate = ee.Date(caseConfig.event_date);
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Load, filter and process the raster collections.
+
+// `Harmonized Sentinel-2 MSI L2A`
+var collection = ee.ImageCollection(s2Config.name)
+  .filter(ee.Filter.inList("PRODUCT_ID", identifiers))
+  // Calculate and set a `timeliness` property.
+  .map(function(raster){
+    var acquisitionDate = raster.date();
+    var timeliness = acquisitionDate.difference(eventDate, "day");
+
+    return raster.set("timeliness", timeliness);
+  })
+  .map(function(raster){
+    var ndwi = raster
+      .expression(S2_UTILITIES.bandCombinations.ndwi.expression)
+      .rename(S2_UTILITIES.bandCombinations.ndwi.name);
+
+    return raster.addBands(ndwi);
+  });
+
+
+/*
+***************************************************************
+  CONSOLE
+***************************************************************
+*/
+
+
+print("*collections*");
+print("S2-L2A", collection);
+
+
+/*
+**************************************************************
+  VISUALIZATION
+**************************************************************
+*/
+
+
+Map.centerObject(collection);
+
+// Populate subpanels.
+identifiers.forEach(function(identifier){
+  var raster = collection.filter(ee.Filter.eq("PRODUCT_ID", identifier)).first();
+  Map.addLayer(raster, rgbVisualization, identifier);
+});

@@ -1,0 +1,435 @@
+/*
+***************************************************************************
+  IMPORTS
+***************************************************************************
+*/
+
+
+var CASE_STUDIES = require("users/stamlazaros/hua:t-h-e-s-i-s/configurations/case_studies");
+var S1_UTILITIES = require("users/stamlazaros/hua:t-h-e-s-i-s/utilities/s1");
+var S2_UTILITIES = require("users/stamlazaros/hua:t-h-e-s-i-s/utilities/s2");
+
+
+/*
+*********************************************************************
+  FUNCTIONS
+*********************************************************************
+*/
+
+
+//-----------------------Data Displaying Functions-----------------------
+
+
+function create_legend_row(color, name) {
+  /*
+  Description:
+    Creates and formats a single legend row. The row consists of
+    two ui.Label objects, a color box and a description label.
+
+  Parameters:
+    color (string): A hex color code representing the color of the legend box.
+    name  (string): A description for the legend entry.
+
+  Returns:
+    A ui.Panel object representing the legend row.
+  */
+
+  // Create the color box label.
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: "10px",
+      margin: "4px"
+    }
+  });
+ 
+  // Create the description label.
+  var description = ui.Label({
+    value: name,
+    style: {
+      margin: "5px",
+    }
+  });
+ 
+  // Return the legend row panel.
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow("horizontal")
+  });
+}
+
+
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2StartDate = "2015-07-01";
+var s2EndDate = "2026-03-01";
+var cloudProbability = 65;
+
+// `Dynamic World Land Cover`
+var dwStartDate = "2022-03-01";
+var dwEndDate = "2022-11-01";
+
+// `Digital Elevation`
+var demProvider = "USGS";
+var steepnessThreshold = 8;
+
+// `Sentinel-1 GRD`
+var b1 = "VV";
+var b2 = "VH";
+
+var acquisitionIdentifier = "004447_005723_9D4B";
+var rasterIdentifier = "S1A_IW_GRDH_1SDV_20150202T163132_20150202T163157_004447_005723_9D4B";
+
+// Projection of interest.
+var projectionCRS = "EPSG:4326";
+var projectionScale = 10;
+
+// OTSU algorithm
+var vvkwargDefaults = {
+  "initialThreshold":-14,
+  "reductionScale": 180,
+  "smoothing": 100,
+  "bandName": "VV",
+  "connectedPixels": 100,
+  "edgeLength": 20,
+  "smoothEdges": 20,
+  "cannyThreshold": 0.5,
+  "cannySigma": 1,
+  "cannyLt": 0.05,
+  "maxBuckets": 255,
+  "minBucketWidth": 0.001,
+  "maxRaw": 1e6
+};
+
+var vhkwargDefaults = {
+  "initialThreshold":-14,
+  "reductionScale": 180,
+  "smoothing": 100,
+  "bandName": "VH",
+  "connectedPixels": 100,
+  "edgeLength": 20,
+  "smoothEdges": 20,
+  "cannyThreshold": 0.5,
+  "cannySigma": 1,
+  "cannyLt": 0.05,
+  "maxBuckets": 255,
+  "minBucketWidth": 0.001,
+  "maxRaw": 1e6
+};
+
+var polyCoordinates = [
+  20.521707734105185, 38.4405775054311,
+  21.136942109105185, 38.4405775054311,
+  21.136942109105185, 38.91230332427433,
+  20.521707734105185, 38.91230332427433
+];
+
+// GEE assets.
+var rastersFolder = "users/stamlazaros/hua/t-h-e-s-i-s/assets/features/rasters";
+var vectorsFolder = "users/stamlazaros/hua/t-h-e-s-i-s/assets/features/vectors";
+
+
+/*
+********************************************************************
+  CONFIGURATION
+********************************************************************
+*/
+
+
+// `Digital Elevation Models`
+var demConfigs = {
+  CGIAR: {    // `SRTM Digital Elevation Data Version 4`
+    name: "CGIAR/SRTM90_V4"
+  },
+  USGS: {     // `NASA SRTM Digital Elevation`
+    name: "USGS/SRTMGL1_003"
+  },
+  NASA: {     // `NASA NASADEM Digital Elevation`
+    name: "NASA/NASADEM_HGT/001"
+  },
+  ASTER: {    // `AG100: ASTER Global Emissivity Dataset 100-meter V003`
+    name: "NASA/ASTER_GED/AG100_003"
+  }
+};
+
+// `Sentinel-1 GRD`
+var s1Config = {
+  name: "COPERNICUS/S1_GRD"
+};
+
+var s1Visualization = {
+  min: [-25, -25, 0],
+  max: [0, 0, 2],
+  bands: ["VV", "VH", "VVVHQ"]
+};
+
+// `Dynamic World LULC v1`
+var dwConfig = {
+  name: "GOOGLE/DYNAMICWORLD/V1"
+};
+
+var dwLabelsPalette = {
+  "water": "419BDF",
+  "trees": "397D49",
+  "grass": "88B053",
+  "flooded vegetation": "7A87C6",
+  "crops": "E49635",
+  "shrub & scrub": "DFC35A",
+  "built": "C4281B",
+  "bare": "A59B8F",
+  "snow & ice": "B39FE1"
+};
+
+var dwLabels = Object.keys(dwLabelsPalette);
+
+var dwPalette = dwLabels.map(function(key){
+  return dwLabelsPalette[key];
+});
+
+var dwVisualization = {
+  min: 0,
+  max: 8,
+  bands: ["label"],
+  palette: dwPalette
+};
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2l2aConfig = {
+  name: "COPERNICUS/S2_SR_HARMONIZED"
+};
+
+var s2CloudConfig = {
+  name: "COPERNICUS/S2_CLOUD_PROBABILITY"
+};
+
+var rgbVisualization = {
+  min: 0,
+  max: 3000,
+  bands: ["B4", "B3", "B2"]
+};
+
+var mndwiVisualization = {
+  min: -1,
+  max: 0.5,
+  bands: ["MNDWI"],
+  palette: ["red", "yellow", "green", "blue"]
+};
+
+// Visualizations
+var coverVisualization = {
+  min: 0,
+  max: 1,
+  palette: ["deb887", "45b6fe"]
+};
+
+// GEE assets.
+var demConfig = demConfigs[demProvider];
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Define the projection of interest.
+
+var projection = ee.Projection(projectionCRS).atScale(projectionScale);
+
+// Load, filter and process the raster collections.
+
+// `Digital Elevation`
+var elevation = ee.Image(demConfig.name).unmask();
+var steepAreas = ee.Terrain.slope(elevation).gte(steepnessThreshold);
+
+// `Sentinel-1 GRD`
+var s1Raster = ee.Image([s1Config.name, rasterIdentifier].join("/"));
+
+s1Raster = s1Raster.addBands({
+  srcImg: s1Raster.select("angle").updateMask(s1Raster.select("angle").mask().gt(0)),
+  overwrite: true,
+});
+
+// Handle the geometries.
+var areaOfInterest = s1Raster.geometry();
+var ring = ee.Geometry.LinearRing(areaOfInterest.coordinates().flatten());
+
+// Apply angular-based radiometric slope correction.
+var s1Raster = S1_UTILITIES.slope_correction(s1Raster, elevation);
+
+// Apply a Refined-Lee speckle filter to reduce noise.
+s1Raster = ee.Image(S1_UTILITIES.refined_lee(s1Raster)
+  .copyProperties(s1Raster, ["system:index"]));
+
+// Engineer new bands.
+
+var quotientExpression = S1_UTILITIES.bandCombinations.quotient.expression;
+var quotientName = S1_UTILITIES.bandCombinations.quotient.name;
+
+// `VVVHQ`
+var quotient = ee.Image().expression({
+    expression: quotientExpression,
+    map: {
+      b1: s1Raster.select(b1),
+      b2: s1Raster.select(b2)
+    }
+  }).rename(quotientName.replace("b1", b1).replace("b2", b2));
+
+// Incorporate extra bands into the raster.
+s1Raster = s1Raster.addBands([quotient]);
+
+// Perform image segmentation (OTSU algorithm).
+
+var otsuRectangle = ee.Geometry.Polygon(polyCoordinates);
+
+vvkwargDefaults.otsuRegion = otsuRectangle;
+vhkwargDefaults.otsuRegion = otsuRectangle;
+
+var vvOtsuMask = S1_UTILITIES.edge_otsu_algorithm(s1Raster.select(b1), vvkwargDefaults);
+var vhOtsuMask = S1_UTILITIES.edge_otsu_algorithm(s1Raster.select(b2), vhkwargDefaults);
+
+// Create a non/permanent water surfaces mask.
+var otsuWaterMask = vvOtsuMask.bitwiseAnd(vhOtsuMask)
+  .toInt8()
+  .rename("OTSU")
+  .where(steepAreas, 0)
+  .reproject(projection);
+
+// Incorporate mask into the raster.
+s1Raster = s1Raster.addBands([otsuWaterMask]);
+
+// `Dynamic World Land Cover V1`
+var dwMosaic = ee.ImageCollection(dwConfig.name)
+  .filterDate(dwStartDate, dwEndDate)
+  .filterBounds(areaOfInterest)
+  .mode()
+  .select(["label"])
+  .clip(areaOfInterest);
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2Collection = ee.ImageCollection(s2l2aConfig.name)
+  .filterDate(s2StartDate, s2EndDate)
+  .filterBounds(areaOfInterest);
+
+// Aggregate the system index values.
+var s2Indexes = s2Collection.aggregate_array("system:index");
+
+// `Sentinel-2: Cloud Probability`
+var s2Clouds = ee.ImageCollection(s2CloudConfig.name)
+  .filter(ee.Filter.inList("system:index", s2Indexes));
+
+// Join the two collecctions based on the system index values.
+var mergedS2Collection = ee.Join.saveFirst("cloud_mask").apply({
+  primary: s2Collection,
+  secondary: s2Clouds,
+  condition:
+      ee.Filter.equals({leftField: "system:index", rightField: "system:index"})
+});
+
+// Generate a mosaic.
+var s2Mosaic = ee.ImageCollection(mergedS2Collection)
+  .map(S2_UTILITIES.mask_edges)
+  .map(function(raster){
+    return S2_UTILITIES.mask_clouds(raster, cloudProbability);
+  })
+  .select(["B11", "B8", "B4", "B3", "B2"])
+  .median()
+  .clip(areaOfInterest);
+
+// Engineer new bands.
+
+// `MNDWI`
+var mndwi = s2Mosaic
+  .expression(S2_UTILITIES.bandCombinations.mndwi.expression)
+  .rename(S2_UTILITIES.bandCombinations.mndwi.name);
+
+// Create a non/permanent water surfaces mask.
+var mndwiWaterMask = mndwi.select(["MNDWI"]).gte(0);
+
+
+/*
+***************************************************************
+  CONSOLE
+***************************************************************
+*/
+
+
+print("*rasters*");
+print("s1-grd", s1Raster);
+print("s2-l2a:", s2Mosaic);
+print("dw lulc:", dwMosaic);
+print("otsu water mask", otsuWaterMask);
+
+
+/*
+**************************************************************
+  VISUALIZATION
+**************************************************************
+*/
+
+
+// Generate categorical legends.
+
+// `Dynamic-World`
+var dwLegend = ui.Panel({
+  style: {position: "bottom-left", padding: "5px"}
+});
+
+var dwLegendTitle = ui.Label({
+  value: "DW",
+  style: {margin: "0px", fontSize: "14px", fontWeight: "bold"}
+});
+
+dwLegend.add(dwLegendTitle);
+
+for (var key in dwLabelsPalette) {
+  dwLegend.add(create_legend_row(dwLabelsPalette[key], key));
+}
+
+Map.centerObject(ring);
+Map.add(dwLegend);
+
+Map.addLayer(s2Mosaic, rgbVisualization, "rasters: S2-L2A (RGB)");
+Map.addLayer(mndwi, mndwiVisualization, "rasters: S2-L2A (MNDWI)");
+Map.addLayer(mndwiWaterMask, coverVisualization, "rasters: S2-L2A (MNDWI-mask)");
+
+Map.addLayer(dwMosaic, dwVisualization, "rasters: DW");
+
+Map.addLayer(s1Raster, s1Visualization, "rasters: S1-GRD");
+Map.addLayer(vvOtsuMask, coverVisualization, "rasters: water-mask `VV`" );
+Map.addLayer(vhOtsuMask, coverVisualization, "rasters: water-mask `VH`");
+Map.addLayer(otsuWaterMask, coverVisualization, "rasters: water-mask");
+
+Map.addLayer(ring, {color: "white"}, "vectors: region");
+Map.addLayer(otsuRectangle, {}, "vectors: otsu");
+
+
+/*
+**************************************************************
+  EXPORT
+**************************************************************
+*/
+
+
+Export.image.toAsset({
+  image: s1Raster.select(["VV", "VH", "OTSU"]),
+  description: acquisitionIdentifier,
+  assetId: [rastersFolder, acquisitionIdentifier].join("/"),
+  maxPixels: 1e13,
+  crs: projectionCRS,
+  scale: projectionScale,
+  region: areaOfInterest
+});
+
+Export.table.toAsset({
+  collection: ee.FeatureCollection(ee.Feature(areaOfInterest)),
+  assetId: [vectorsFolder, acquisitionIdentifier].join("/"),
+  description: acquisitionIdentifier,
+});

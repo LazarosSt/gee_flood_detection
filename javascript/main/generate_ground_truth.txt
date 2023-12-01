@@ -1,0 +1,367 @@
+/*
+**********************************************************************
+  IMPORTS
+**********************************************************************
+*/
+
+
+var CASE_STUDIES = require("users/stamlazaros/hua:t-h-e-s-i-s/configurations/case_studies");
+var S2_UTILITIES = require("users/stamlazaros/hua:t-h-e-s-i-s/utilities/s2");
+
+
+/*
+*********************************************************************
+  FUNCTIONS
+*********************************************************************
+*/
+
+
+//-----------------------Data Displaying Functions-----------------------
+
+function create_legend_row(color, name) {
+  /*
+  Description:
+    Creates and formats a single legend row. The row consists of
+    two ui.Label objects, a color box and a description label.
+
+  Parameters:
+    color (string): A hex color code representing the color of the legend box.
+    name  (string): A description for the legend entry.
+
+  Returns:
+    A ui.Panel object representing the legend row.
+  */
+
+  // Create the color box label.
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: "10px",
+      margin: "4px"
+    }
+  });
+ 
+  // Create the description label.
+  var description = ui.Label({
+    value: name,
+    style: {
+      margin: "5px",
+    }
+  });
+ 
+  // Return the legend row panel.
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow("horizontal")
+  });
+}
+
+
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2StartDate = "2023-01-01";
+var s2EndDate = "2023-09-01";
+var cloudProbability = 40;
+
+// `Dynamic World Land Cover`
+var dwStartDate = "2023-01-01";
+var dwEndDate = "2023-09-01";
+
+// Projection of interest.
+var projectionCRS = "EPSG:4326";
+var projectionScale = 10;
+
+// EMS case of interest.
+var caseCode = "emsr692";
+var caseArea = "magnesia";
+
+// GEE assets.
+var NON_WATER_SURFACES = [
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karla/2023_09_07/non_water_surfaces"),
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/magnesia/non_water_surfaces")
+];
+
+var EVENT_SURFACES = [
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karditsa/2023_09_07/flood_surfaces"),
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karla/2023_09_07/flood_surfaces")
+];
+
+var WATER_SURFACES = [
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karditsa/2023_09_07/water_surfaces"),
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/karla/2023_09_07/water_surfaces"),
+  ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/vectors/magnesia/water_surfaces")
+];
+
+var destinationPath = "users/stamlazaros/hua/t-h-e-s-i-s/case_studies/emsr692/rasters/magnesia/2023_09_07/ground_truth";
+
+
+/*
+********************************************************************
+  CONFIGURATION
+********************************************************************
+*/
+
+
+// `Dynamic World LULC v1`
+var dwConfig = {
+  name: "GOOGLE/DYNAMICWORLD/V1"
+};
+
+var dwLabelsPalette = {
+  "water": "419BDF",
+  "trees": "397D49",
+  "grass": "88B053",
+  "flooded vegetation": "7A87C6",
+  "crops": "E49635",
+  "shrub & scrub": "DFC35A",
+  "built": "C4281B",
+  "bare": "A59B8F",
+  "snow & ice": "B39FE1"
+};
+
+var dwPalette = Object.keys(dwLabelsPalette).map(function(key){
+  return dwLabelsPalette[key];
+});
+
+var dwVisualization = {
+  min: 0,
+  max: 8,
+  bands: ["label"],
+  palette: dwPalette
+};
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2Config = {
+  name: "COPERNICUS/S2_SR_HARMONIZED"
+};
+
+var s2CloudConfig = {
+  name: "COPERNICUS/S2_CLOUD_PROBABILITY"
+};
+
+var rgbVisualization = {
+  min: 0,
+  max: 3000,
+  bands: ["B4", "B3", "B2"]
+};
+
+var mndwiVisualization = {
+  min: -1,
+  max: 0.5,
+  bands: ["MNDWI"],
+  palette: ["red", "yellow", "green", "blue"]
+};
+
+// Classification.
+var classVisualization = {
+  min: 0,
+  max: 2,
+  palette: ["deb887", "C60404", "45b6fe"]
+};
+
+var classPalette = {
+  "non water": "deb887",
+  "flood": "C60404",
+  "water": "45b6fe"
+};
+
+// GEE assets.
+var caseConfig = CASE_STUDIES.cases[caseCode][caseArea];
+
+var areaOfInterest = caseConfig.area_of_interest.geometry();
+var ring = ee.Geometry.LinearRing(areaOfInterest.coordinates().flatten());
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Define the projection of interest.
+
+var projection = ee.Projection(projectionCRS).atScale(projectionScale);
+
+// Load, filter and process the raster collections.
+
+// `Dynamic World Land Cover V1`
+var dwCollection = ee.ImageCollection(dwConfig.name)
+  .filterDate(dwStartDate, dwEndDate)
+  .filterBounds(caseConfig.area_of_interest);
+
+// Generate a mosaic.
+var dwMosaic = dwCollection
+  .mode()
+  .select(["label"])
+  .clipToCollection(caseConfig.area_of_interest);
+
+// `Harmonized Sentinel-2 MSI Level-2A`
+var s2Collection = ee.ImageCollection(s2Config.name)
+  .filterDate(s2StartDate, s2EndDate)
+  .filterBounds(caseConfig.area_of_interest);
+
+// Aggregate the system index values.
+var indexes = s2Collection.aggregate_array("system:index");
+
+// `Sentinel-2: Cloud Probability`
+var s2Clouds = ee.ImageCollection(s2CloudConfig.name)
+  .filter(ee.Filter.inList("system:index", indexes));
+
+// Join the two collecctions based on the system index values.
+var joinedS2Collection = ee.Join.saveFirst("cloud_mask").apply({
+  primary: s2Collection,
+  secondary: s2Clouds,
+  condition:
+    ee.Filter.equals({leftField: "system:index", rightField: "system:index"})
+});
+
+// Perform cloud masking.
+var joinedS2Collection = ee.ImageCollection(joinedS2Collection)
+  .map(S2_UTILITIES.mask_edges)
+  .map(function(raster){
+    return S2_UTILITIES.mask_clouds(raster, cloudProbability);
+  });
+
+// Generate a mosaic.
+var s2Mosaic = joinedS2Collection
+  .mean()
+  .select(["B11", "B4", "B3", "B2"])
+  .clipToCollection(caseConfig.area_of_interest);
+
+// Engineer new bands.
+
+// `MNDWI`
+var mndwi = s2Mosaic
+  .expression(S2_UTILITIES.bandCombinations.mndwi.expression)
+  .rename(S2_UTILITIES.bandCombinations.mndwi.name);
+
+// Engineer a ground-truth raster.
+
+// Create a constant raster layer per class.
+NON_WATER_SURFACES = ee.FeatureCollection(NON_WATER_SURFACES).flatten();
+EVENT_SURFACES = ee.FeatureCollection(EVENT_SURFACES).flatten();
+WATER_SURFACES = ee.FeatureCollection(WATER_SURFACES).flatten();
+
+var background = ee.Image.constant(0).clipToCollection(caseConfig.area_of_interest).reproject(projection);
+var mask = ee.Image.constant(1).clipToCollection(caseConfig.area_of_interest).reproject(projection);
+
+// Flooded surfaces.
+var floodMask = mask.clipToCollection(EVENT_SURFACES);
+
+var eventSurfaces = background.expression("const + 1", {"const": background.select("constant")})
+  .updateMask(floodMask)
+  .reproject(projection);
+
+// Permanent water surfaces.
+var waterMask = mask.clipToCollection(WATER_SURFACES);
+
+var waterSurfaces = background.expression("const + 2", {"const": background.select("constant")})
+  .updateMask(waterMask)
+  .reproject(projection);
+
+// Non water surfaces
+var nonWaterMask = mask.clipToCollection(NON_WATER_SURFACES);
+var nonWaterSurfaces = background.updateMask(nonWaterMask).reproject(projection);
+
+// Combine all constant layers.
+var groundTruth = ee.ImageCollection([background, waterSurfaces, nonWaterSurfaces, eventSurfaces])
+  .map(function(raster){
+    return raster.int();
+  })
+  .mosaic()
+  .rename("class")
+  .reproject(projection);
+
+
+/*
+***************************************************************
+  CONSOLE
+***************************************************************
+*/
+
+
+print("*collection sizes*");
+print("dynamic-world:", dwCollection.size());
+print("sentinel-2 L2A:", s2Collection.size());
+
+
+/*
+**************************************************************
+  VISUALIZATION
+**************************************************************
+*/
+
+
+// Generate categorical legends.
+
+// `Dynamic-World`
+var dwLegend = ui.Panel({
+  style: {
+    position: "bottom-left",
+    padding: "5px"
+  }
+});
+
+var dwLegendTitle = ui.Label({
+  value: "DW",
+  style: {margin: "0px", fontSize: "14px", fontWeight: "bold"}
+});
+
+dwLegend.add(dwLegendTitle);
+
+for (var key in dwLabelsPalette) {
+  dwLegend.add(create_legend_row(dwLabelsPalette[key], key));
+}
+
+// `Classification`
+var legend = ui.Panel({
+  style: {position: "bottom-right", padding: "5px"}
+});
+
+var legendTitle = ui.Label({
+  value: "RF",
+  style: {margin: "0px", fontSize: "14px", fontWeight: "bold"}
+});
+
+legend.add(legendTitle);
+
+for (var key in classPalette) {
+  legend.add(create_legend_row(classPalette[key], key));
+}
+
+Map.add(legend);
+Map.add(dwLegend);
+
+Map.centerObject(ring);
+
+Map.addLayer(s2Mosaic, rgbVisualization, "rasters: S2-L2A (RGB)");
+Map.addLayer(mndwi, mndwiVisualization, "rasters: S2-L2A (MNDWI)");
+Map.addLayer(dwMosaic, dwVisualization, "rasters: DW");
+
+Map.addLayer(groundTruth, classVisualization, "rasters: ground-truth");
+Map.addLayer(ring, {color: "white"}, "vectors: region");
+
+
+/*
+**************************************************************
+  EXPORT
+**************************************************************
+*/
+
+
+Export.image.toAsset({
+  image: groundTruth,
+  assetId: destinationPath,
+  description: [caseArea, "ground_truth"].join("_"),
+  maxPixels: 1e13,
+  crs: projectionCRS,
+  scale: projectionScale,
+  region: caseConfig.area_of_interest.geometry(),
+});

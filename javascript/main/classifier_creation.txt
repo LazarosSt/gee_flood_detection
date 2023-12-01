@@ -1,0 +1,195 @@
+/*
+**********************************************************************
+  PARAMETERS
+**********************************************************************
+*/
+
+
+// `Classification`
+var samplesCatalog = {
+  non_water: [
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/non_water/003747_00476D_87B6_004447_005723_9D4B"),
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/non_water/010579_00FBBC_09F9_005329_006C09_C51B"),
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/non_water/025053_02C3A8_1153_021203_02475C_B1FE"),
+  ],
+  water: [
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/water/003747_00476D_87B6_004447_005723_9D4B"),
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/water/010579_00FBBC_09F9_005329_006C09_C51B"),
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/water/025053_02C3A8_1153_021203_02475C_B1FE"),
+  ],
+  flood: [
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/flood/003747_00476D_87B6_004447_005723_9D4B"),
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/flood/010579_00FBBC_09F9_005329_006C09_C51B"),
+    ee.FeatureCollection("users/stamlazaros/hua/t-h-e-s-i-s/assets/samples/flood/025053_02C3A8_1153_021203_02475C_B1FE"),
+  ]
+};
+
+var classifierParameters = {
+  numberOfTrees: 50,
+  // variablesPerSplit: null,
+  // minLeafPopulation: 1,
+  // bagFraction: 0.5,
+  // maxNodes: null,
+  seed: 0
+};
+
+var classifierProperties = [
+  "VHVHD", "VHVHQ", "VVVHD", "VVVHQ", "VVVVD", "VVVVQ", "NDPID",
+  "PRE_VV", "PRE_VH", "PRE_NDPI", "POST_VV", "POST_VH", "POST_NDPI"
+];
+
+// GEE assets.
+var classifierIdentifier = "base";
+var destinationFolder = "users/stamlazaros/hua/t-h-e-s-i-s/assets/classifiers";
+
+
+/*
+****************************************************************
+  COMPUTATIONS
+****************************************************************
+*/
+
+
+// Process the samples catalog.
+
+// Flatten sample collections.
+var nonWaterSamples = ee.FeatureCollection(samplesCatalog.non_water).flatten();
+var floodSamples = ee.FeatureCollection(samplesCatalog.flood).flatten();
+var waterSamples = ee.FeatureCollection(samplesCatalog.water).flatten();
+
+// Merge sample collections.
+var samples = nonWaterSamples.merge(floodSamples).merge(waterSamples);
+
+// Create, train and process a RF classifier.
+
+var classifier = ee.Classifier.smileRandomForest(classifierParameters)
+  .train({
+    features: samples,
+    classProperty: "class",
+    inputProperties: classifierProperties
+  });
+
+// Assess classifier reliability.
+var classifierExplanation = classifier.explain();
+
+var trees = ee.List(ee.Dictionary(classifierExplanation).get("trees"));
+
+trees.size().evaluate(function(treesCount){
+  print("classifier: `" + classifierIdentifier + "` contains: `" + treesCount + "` out of: `" + classifierParameters.numberOfTrees + "` trees.");
+
+  if(treesCount == classifierParameters.numberOfTrees){
+    // Determine tree sizes by evaluating the length of their string representations.
+    var treeSizes = trees.map(function(tree){return ee.String(tree).length()});
+
+    // Calculate property importances.
+
+    // Absolute
+    var absPropertyImportances = ee.Dictionary(classifierExplanation.get("importance"));
+    var absFeatImpCollection = ee.FeatureCollection([ee.Feature(null, absPropertyImportances)]);
+
+    // Relative
+    var importancesSum = absPropertyImportances.values().reduce(ee.Reducer.sum());
+    var relPropertyImportances = absPropertyImportances
+      .map(function(key, value){
+        return ee.Number(value).divide(importancesSum).multiply(100);
+      });
+
+    var relFeatImpCollection = ee.FeatureCollection([ee.Feature(null, relPropertyImportances)]);
+
+    // Store classifier as a feature collection.
+
+    // Handle the `Unable to export features with empty geometry` error.
+    var dummyFeature = ee.Feature(ee.Geometry.Point([0,0]));
+
+    var classifierFeatures = ee.FeatureCollection(trees.map(function(tree){
+      return dummyFeature.set("tree", tree);
+    }));
+  
+    // Set properties.
+
+    var elements;
+
+    // Confusion matrix.
+    elements = classifier.confusionMatrix().getInfo().map(function(row){
+      return row.join(",");
+    });
+
+    classifierFeatures = classifierFeatures.set("confusion_matrix", elements.join("|"));
+
+    // Property names & importances.
+    elements = relPropertyImportances.map(function(key, value){
+      return ee.String(key).cat(",").cat(value);
+    })
+    .values()
+    .getInfo();
+
+    classifierFeatures = classifierFeatures.set("feature_importances", elements.join("|"));
+    classifierFeatures = classifierFeatures.set("feature_names", classifierFeatures);
+
+    // Generate charts.
+
+    var multiplicities;
+
+    // `Absolute property importances`
+    var absoluteImportanceChart = ui.Chart.feature.byProperty({
+      features: absFeatImpCollection
+    })
+    .setOptions({
+      legend: {position: "none"},
+      title: "Property Importances (Absolute)",
+      vAxis: {title: "Importance"},
+      hAxis: {title: "Properties"}
+    })
+    .setChartType("ColumnChart");
+
+    // `Relative property importances`
+    var relativeImportanceChart = ui.Chart.feature.byProperty({
+      features: relFeatImpCollection
+    })
+    .setOptions({
+      legend: {position: "none"},
+      title: "Property Importances (Relative)",
+      vAxis: {title: "Importance (%)"},
+      hAxis: {title: "Properties"}
+    })
+    .setChartType("ColumnChart");
+
+
+    /*
+    ***************************************************************
+      CONSOLE
+    ***************************************************************
+    */
+    
+  
+    print(absoluteImportanceChart);
+    print(relativeImportanceChart);
+
+    print("*classifier*");
+    print(classifier);
+    print(classifierFeatures);
+    print("name:", classifierIdentifier);
+    print("tree sizes:", treeSizes);
+    print("properties:", classifierProperties);
+
+    print("*samples*");
+    print("total number of samples:", samples.size());
+    print("number of flood samples:", floodSamples.size());
+    print("number of water (sea) samples:", waterSamples.size());
+    print("number of non-water samples:", nonWaterSamples.size());
+
+
+    /*
+    **************************************************************
+      EXPORT
+    **************************************************************
+    */
+
+
+    Export.table.toAsset({
+      collection: classifierFeatures,
+      description: classifierIdentifier,
+      assetId: [destinationFolder, classifierIdentifier].join("/")
+    });
+  }
+});
