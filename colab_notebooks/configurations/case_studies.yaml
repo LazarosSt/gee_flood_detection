@@ -1,0 +1,6 @@
+emsr692:
+  magnesia:
+    event_date: '2018-03-27T15:00:00'
+    activation_date: 2018-03-29T11:27
+    url: https://rapidmapping.emergency.copernicus.eu/EMSR692/download
+    area_of_interest: path/to/vector/file

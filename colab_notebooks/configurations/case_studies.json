@@ -1,0 +1,10 @@
+{
+  "emsr692": {
+    "magnesia": {
+      "event_date": "2023-09-05",
+      "activation_date": "2023-09-05",
+      "url": "https://rapidmapping.emergency.copernicus.eu/EMSR692/download",
+      "area_of_interest": "path/to/vector/file"
+    }
+  }
+}
